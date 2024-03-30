@@ -93,6 +93,11 @@ func GetPaths_GPU(prefix ...string) (string, string) {
 	return pathLoop(Paths_GPU, prefix...)
 }
 
+var Paths_GPU_DVFS_Governor = []string{"dvfs_governor"}
+func GetPaths_GPU_DVFS_Governor(prefix ...string) (string, string) {
+	return pathLoop(Paths_GPU_DVFS_Governor, prefix...)
+}
+
 var Paths_GPU_DVFS_Max = []string{"dvfs_max_lock"}
 func GetPaths_GPU_DVFS_Max(prefix ...string) (string, string) {
 	return pathLoop(Paths_GPU_DVFS_Max, prefix...)

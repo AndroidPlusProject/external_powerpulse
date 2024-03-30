@@ -39,6 +39,7 @@ type GPU struct {
 }
 
 type DVFS struct {
+	Governor string
 	Max json.Number
 	Min json.Number
 }
@@ -212,6 +213,9 @@ func (dev *Device) getProfile(name string, dst *Profile) {
 			if dst.GPU.DVFS == nil {
 				dst.GPU.DVFS = profile.GPU.DVFS
 			} else {
+				if profile.GPU.DVFS.Governor != "" {
+					dst.GPU.DVFS.Governor = profile.GPU.DVFS.Governor
+				}
 				if profile.GPU.DVFS.Max.String() != "" {
 					dst.GPU.DVFS.Max = profile.GPU.DVFS.Max
 				}
@@ -452,6 +456,15 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 		if gpu.DVFS != nil {
 			dvfs := gpu.DVFS
 			Debug("Loading GPU DVFS")
+			governor := dvfs.Governor
+			if governor != "" {
+				governorPath := pathJoin(gpuPath, dev.Paths.GPU.DVFS.Governor)
+				if debug {
+					Debug("> GPU > DVFS > Governor = %s", governor)
+					Debug(governorPath)
+				}
+				dev.BufferWrite(governorPath, governor)
+			}
 			max := dvfs.Max.String()
 			if max != "" {
 				maxPath := pathJoin(gpuPath, dev.Paths.GPU.DVFS.Max)

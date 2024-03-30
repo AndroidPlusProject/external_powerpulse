@@ -66,6 +66,7 @@ type PathsGPU struct {
 }
 
 type PathsGPUDVFS struct {
+	Governor string //universal7420: dvfs_governor
 	Max string //universal7420: dvfs_max_lock
 	Min string //universal7420: dvfs_min_lock
 }
@@ -265,6 +266,8 @@ func (p *Paths) Init() error {
 				if err := pathMustOrStockCanExist(&dvfs.Min, GetPaths_GPU_DVFS_Min, gpuPath); err == nil {
 					gpu.DVFS = dvfs
 				}
+			} else if err := pathMustOrStockCanExist(&dvfs.Governor, GetPaths_GPU_DVFS_Governor, gpuPath); err == nil {
+				gpu.DVFS = dvfs
 			}
 			highspeed := &PathsGPUHighspeed{}
 			if err := pathMustOrStockCanExist(&highspeed.Clock, GetPaths_GPU_Highspeed_Clock, gpuPath); err == nil {
@@ -286,6 +289,9 @@ func (p *Paths) Init() error {
 		if gpu.DVFS != nil {
 			dvfs := gpu.DVFS
 
+			if err := pathMustOrStockCanExist(&dvfs.Governor, GetPaths_GPU_DVFS_Governor, gpuPath); err != nil {
+				return pathErrorInvalid(dvfs.Governor, "gpu/dvfs/governor")
+			}
 			if err := pathMustOrStockCanExist(&dvfs.Max, GetPaths_GPU_DVFS_Max, gpuPath); err != nil {
 				return pathErrorInvalid(dvfs.Max, "gpu/dvfs/max")
 			}
@@ -296,7 +302,7 @@ func (p *Paths) Init() error {
 
 		if gpu.Highspeed != nil {
 			hs := gpu.Highspeed
-			
+
 			if err := pathMustOrStockCanExist(&hs.Clock, GetPaths_GPU_Highspeed_Clock, gpuPath); err != nil {
 				return pathErrorInvalid(hs.Clock, "gpu/highspeed/clock")
 			}
