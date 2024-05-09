@@ -9,8 +9,6 @@ import (
 func (dev *Device) Boost(durMs int32) {
 	//Snapshot the time so we don't prolong or delay boosts
 	startTime := time.Now()
-	dev.BoostMutex.Lock()
-	defer dev.BoostMutex.Unlock()
 
 	profile := dev.GetProfileNow()
 	if profile == nil { return }
@@ -30,15 +28,19 @@ func (dev *Device) Boost(durMs int32) {
 		clusterDurMs -= int32(time.Now().Sub(startTime).Milliseconds()) * 1000
 		if clusterDurMs <= 0 { continue }
 		if governorName := dev.GetCPUGovernor(clusterName); governorName != "" {
-			if err := dev.SetCPUGovernorData(clusterName, governorName, "boostpulse_duration", fmt.Sprintf("%d", clusterDurMs)); err != nil {
-				Error("Failed to time boost on %s for %dμs: %v", clusterName, clusterDurMs, err)
-				continue
+			if governorName == "interactive" {
+				dev.BoostMutex.Lock()
+				defer dev.BoostMutex.Unlock()
+				//go Debug("Boosting %s for %dμs", clusterName, clusterDurMs)
+				if err := dev.SetCPUGovernorData(clusterName, governorName, "boostpulse_duration", fmt.Sprintf("%d", clusterDurMs)); err != nil {
+					Error("Failed to time boost on %s for %dμs: %v", clusterName, clusterDurMs, err)
+					continue
+				}
+				if err := dev.SetCPUGovernorData(clusterName, governorName, "boostpulse", "1"); err != nil {
+					Error("Failed to boost %s: %v", clusterName, err)
+					continue
+				}
 			}
-			if err := dev.SetCPUGovernorData(clusterName, governorName, "boostpulse", "1"); err != nil {
-				Error("Failed to boost %s: %v", clusterName, err)
-				continue
-			}
-			go Debug("Boosting %s for %dμs", clusterName, clusterDurMs)
 		} else { Error("Failed to boost %s: Could not identify governor", clusterName) }
 	}
 }
@@ -85,7 +87,7 @@ func (dev *Device) GetCPUGovernor(clusterName string) string {
 func (dev *Device) SetCPUGovernor(clusterName, governorName string) error {
 	if pathCluster, exists := dev.Paths.Clusters[clusterName]; exists {
 		if pathFreq := pathCluster.CPUFreq; pathFreq != nil {
-			governorPath := pathJoin(pathCluster.Path, pathFreq.Path, pathFreq.Governor)
+			governorPath := pathJoin(pathCluster.Path, pathCluster.CPU, pathFreq.Path, pathFreq.Governor)
 			if !pathValid(governorPath) {
 				return fmt.Errorf("failed to find valid path at %s when setting governor: %s/%s", governorPath, clusterName, governorName)
 			}
@@ -121,7 +123,7 @@ func (dev *Device) GetCPUGovernorData(clusterName, governorName string) map[stri
 func (dev *Device) SetCPUGovernorData(clusterName, governorName, controlName, data string) error {
 	if pathCluster, exists := dev.Paths.Clusters[clusterName]; exists {
 		if pathFreq := pathCluster.CPUFreq; pathFreq != nil {
-			controlPath := pathJoin(pathCluster.Path, pathFreq.Path, governorName, controlName)
+			controlPath := pathJoin(pathCluster.Path, pathCluster.CPU, pathFreq.Path, governorName, controlName)
 			if !pathValid(controlPath) {
 				return fmt.Errorf("failed to find valid path at %s when setting data: %s/%s/%s", controlPath, clusterName, governorName, controlName)
 			}

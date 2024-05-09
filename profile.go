@@ -128,30 +128,34 @@ func (dev *Device) SyncProfile() error {
 }
 
 func (dev *Device) GetProfile(name string) *Profile {
+	if _, exists := dev.ProfilesInherited[name]; exists {
+		return dev.ProfilesInherited[name]
+	}
+	if _, exists := dev.Profiles[name]; exists {
+		return dev.Profiles[name]
+	}
+	return nil
+}
+
+func (dev *Device) GetInheritedProfiles() map[string]*Profile {
 	profile := &Profile{}
+	profiles := make(map[string]*Profile)
 
-	index := -1
+	//Store a copy of each profile after inheritance from the previous one
 	for i := 0; i < len(dev.ProfileInheritance); i++ {
-		if dev.ProfileInheritance[i] == name {
-			index = i
-			break
-		}
+		dev.getProfile(dev.ProfileInheritance[i], profile)
+		tmp := *profile
+		profiles[dev.ProfileInheritance[i]] = &tmp
 	}
 
-	//Inherit any parent profiles if available
-	if index > 0 {
-		for i := 0; i < index; i++ {
-			dev.getProfile(dev.ProfileInheritance[i], profile)
-		}
-	}
-	dev.getProfile(name, profile)
-
-	return profile
+	return profiles
 }
 
 func (dev *Device) getProfile(name string, dst *Profile) {
+	Debug("Inheriting profile %s", name)
 	profile := dev.Profiles[name]
 	if profile == nil {
+		Error("Nil profile %s", name)
 		return
 	}
 
@@ -159,11 +163,14 @@ func (dev *Device) getProfile(name string, dst *Profile) {
 		dst.Clusters = make(map[string]*Cluster)
 	}
 	for clusterName, cluster := range profile.Clusters {
+		//("%s: Working on cluster %s", name, clusterName)
 		if _, exists := dst.Clusters[clusterName]; !exists {
+			//Debug("%s: Cluster data missing, copying and continuing", name)
 			dst.Clusters[clusterName] = cluster
 			continue
 		}
 		if dst.Clusters[clusterName].CPUFreq == nil {
+			//Debug("%s: CPUFreq data missing, copying and continuing", name)
 			dst.Clusters[clusterName].CPUFreq = cluster.CPUFreq
 			continue
 		}
@@ -180,13 +187,24 @@ func (dev *Device) getProfile(name string, dst *Profile) {
 			if cluster.CPUFreq.Governor != "" {
 				dst.Clusters[clusterName].CPUFreq.Governor = cluster.CPUFreq.Governor
 			}
-			if dst.Clusters[clusterName].CPUFreq.Governors == nil {
-				dst.Clusters[clusterName].CPUFreq.Governors = cluster.CPUFreq.Governors
-			} else if cluster.CPUFreq.Governors != nil {
-				for data, value := range cluster.CPUFreq.Governors {
-					dst.Clusters[clusterName].CPUFreq.Governors[data] = value
-				}
+			govs := dst.Clusters[clusterName].CPUFreq.Governors
+			if govs == nil {
+				//Debug("%s: Using blank governors", name)
+				govs = make(map[string]map[string]interface{})
 			}
+			for governorName, governorData := range cluster.CPUFreq.Governors {
+				govData := make(map[string]interface{})
+				if _, exists := govs[governorName]; exists {
+					//Debug("%s: Reusing inherited data for %s", name, governorName)
+					govData = govs[governorName]
+				}
+				for arg, val := range governorData {
+					//Debug("%s: %s -> %s = %v", name, governorName, arg, val)
+					govData[arg] = val.(interface{})
+				}
+				govs[governorName] = govData
+			}
+			dst.Clusters[clusterName].CPUFreq.Governors = govs
 		}
 	}
 
@@ -369,79 +387,61 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 	for clusterName, cluster := range profile.Clusters {
 		pathCluster := dev.Paths.Clusters[clusterName]
 		clusterPath := pathCluster.Path
-		if debug {
-			Debug("Loading CPU cluster %s", clusterName)
-			Debug(clusterPath)
-		}
+		Debug("Loading CPU cluster %s", clusterName)
+		cpuPath := pathJoin(clusterPath, pathCluster.CPU)
+		Debug("Loading CPU node %s", pathCluster.CPU)
 
 		if cluster.CPUFreq != nil {
 			freq := cluster.CPUFreq
 			pathFreq := dev.Paths.Clusters[clusterName].CPUFreq
-			freqPath := pathJoin(clusterPath, pathFreq.Path)
-			if debug {
-				Debug("Loading cpufreq %s", freqPath)
-				Debug(freqPath)
-			}
+			freqPath := pathJoin(cpuPath, pathFreq.Path)
+			Debug("Loading cpufreq %s", freqPath)
 			if freq.Governor != "" {
 				governorPath := pathJoin(freqPath, pathFreq.Governor)
-				if debug {
-					Debug("> CPUFreq > Governor = %s", freq.Governor)
-					Debug(governorPath)
-				}
+				Debug("> CPUFreq > Governor = %s", freq.Governor)
 				if freq.Governor == "powerpulse" {
 					dev.BufferWrite(governorPath, "userspace")
 				} else {
 					dev.BufferWrite(governorPath, freq.Governor)
 				}
+				if governor, exists := freq.Governors[freq.Governor]; exists && governor != nil {
+					governorPath := pathJoin(freqPath, freq.Governor)
+					Debug("Loading cpufreq governor %s", freq.Governor)
+					for arg, val := range governor {
+						argPath := pathJoin(governorPath, arg)
+						switch v := val.(type) {
+						case bool:
+							Debug("> %s > %s = %t", freq.Governor, arg, v)
+							if err := dev.BufferWriteBool(argPath, v); err != nil {return err}
+						case float64:
+							Debug("> %s > %s = %.0F", freq.Governor, arg, v)
+							dev.BufferWriteNumber(argPath, v)
+						case string:
+							Debug("> %s > %s = %s", freq.Governor, arg, v)
+							dev.BufferWrite(argPath, v)
+						default:
+							return fmt.Errorf("governor %s has invalid value type '%T' for arg %s", freq.Governor, v, arg)
+						}
+					}
+				}
 			}
 			max := freq.Max.String()
 			if max != "" {
-				Debug("> CPUFreq > Max = %s", max)
 				maxPath := pathJoin(freqPath, pathFreq.Max)
-				Debug(maxPath)
+				Debug("> CPUFreq > Max = %s", max)
 				dev.BufferWrite(maxPath, max)
 			}
 			min := freq.Min.String()
 			if min != "" {
 				minPath := pathJoin(freqPath, pathFreq.Min)
-				if debug {
-					Debug("> CPUFreq > Min = %s", min)
-					Debug(minPath)
-				}
+				Debug("> CPUFreq > Min = %s", min)
 				dev.BufferWrite(minPath, min)
 			}
 			speed := freq.Speed.String()
 			if speed != "" {
 				speedPath := pathJoin(freqPath, pathFreq.Speed)
-				if debug {
-					Debug("> CPUFreq > Speed = %s", speed)
-					Debug(speedPath)
-				}
+				Debug("> CPUFreq > Speed = %s", speed)
 				dev.BufferWrite(speedPath, speed)
-			}
-			for governorName, governor := range freq.Governors {
-				governorPath := pathJoin(freqPath, governorName)
-				if debug {
-					Debug("Loading cpufreq governor %s", governorName)
-					Debug(governorPath)
-				}
-				for arg, val := range governor {
-					argPath := pathJoin(governorPath, arg)
-					Debug(argPath)
-					switch v := val.(type) {
-					case bool:
-						Debug("> %s > %s = %t", governorName, arg, v)
-						if err := dev.BufferWriteBool(argPath, v); err != nil {return err}
-					case float64:
-						Debug("> %s > %s = %.0F", governorName, arg, v)
-						dev.BufferWriteNumber(argPath, v)
-					case string:
-						Debug("> %s > %s = %s", governorName, arg, v)
-						dev.BufferWrite(argPath, v)
-					default:
-						return fmt.Errorf("governor %s has invalid value type '%T' for arg %s", governorName, v, arg)
-					}
-				}
 			}
 		}
 	}
@@ -449,38 +449,26 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 	if profile.GPU != nil {
 		gpu := profile.GPU
 		gpuPath := dev.Paths.GPU.Path
-		if debug {
-			Debug("Loading GPU")
-			Debug(gpuPath)
-		}
+		Debug("Loading GPU")
 		if gpu.DVFS != nil {
 			dvfs := gpu.DVFS
 			Debug("Loading GPU DVFS")
 			governor := dvfs.Governor
 			if governor != "" {
 				governorPath := pathJoin(gpuPath, dev.Paths.GPU.DVFS.Governor)
-				if debug {
-					Debug("> GPU > DVFS > Governor = %s", governor)
-					Debug(governorPath)
-				}
+				Debug("> GPU > DVFS > Governor = %s", governor)
 				dev.BufferWrite(governorPath, governor)
 			}
 			max := dvfs.Max.String()
 			if max != "" {
 				maxPath := pathJoin(gpuPath, dev.Paths.GPU.DVFS.Max)
-				if debug {
-					Debug("> GPU > DVFS > Max = %s", max)
-					Debug(maxPath)
-				}
+				Debug("> GPU > DVFS > Max = %s", max)
 				dev.BufferWrite(maxPath, max)
 			}
 			min := dvfs.Min.String()
 			if min != "" {
 				minPath := pathJoin(gpuPath, dev.Paths.GPU.DVFS.Min)
-				if debug {
-					Debug("> GPU > DVFS > Min = %s", min)
-					Debug(minPath)
-				}
+				Debug("> GPU > DVFS > Min = %s", min)
 				dev.BufferWrite(minPath, min)
 			}
 		}
@@ -490,19 +478,13 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 			clock := hs.Clock.String()
 			if clock != "" {
 				clockPath := pathJoin(gpuPath, dev.Paths.GPU.Highspeed.Clock)
-				if debug {
-					Debug("> GPU > Highspeed > Clock = %s", clock)
-					Debug(clockPath)
-				}
+				Debug("> GPU > Highspeed > Clock = %s", clock)
 				dev.BufferWrite(clockPath, clock)
 			}
 			load := hs.Load.String()
 			if load != "" {
 				loadPath := pathJoin(gpuPath, dev.Paths.GPU.Highspeed.Load)
-				if debug {
-					Debug("> GPU > Highspeed > Load = %s", load)
-					Debug(loadPath)
-				}
+				Debug("> GPU > Highspeed > Load = %s", load)
 				dev.BufferWrite(loadPath, load)
 			}
 		}
@@ -513,58 +495,37 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 		Debug("Loading kernel")
 		if krnl.DynamicHotplug != nil {
 			dynamicHotplugPath := dev.Paths.Kernel.DynamicHotplug
-			if debug {
-				Debug("> Kernel > Dynamic Hotplug = %t", krnl.DynamicHotplug)
-				Debug(dynamicHotplugPath)
-			}
+			Debug("> Kernel > Dynamic Hotplug = %t", krnl.DynamicHotplug)
 			if err := dev.BufferWriteBool(dynamicHotplugPath, *krnl.DynamicHotplug); err != nil {return err}
 		}
 		if krnl.PowerEfficient != nil {
 			powerEfficientPath := dev.Paths.Kernel.PowerEfficient
-			if debug {
-				Debug("> Kernel > Power Efficient = %t", krnl.PowerEfficient)
-				Debug(powerEfficientPath)
-			}
+			Debug("> Kernel > Power Efficient = %t", krnl.PowerEfficient)
 			if err := dev.BufferWriteBool(powerEfficientPath, *krnl.PowerEfficient); err != nil {return err}
 		}
 		if krnl.HMP != nil {
 			hmp := krnl.HMP
 			hmpPath := dev.Paths.Kernel.HMP.Path
-			if debug {
-				Debug("Loading kernel HMP")
-				Debug(hmpPath)
-			}
+			Debug("Loading kernel HMP")
 			hmpPaths := dev.Paths.Kernel.HMP
 			if hmp.Boost != nil {
 				boostPath := pathJoin(hmpPath, hmpPaths.Boost)
-				if debug {
-					Debug("> Kernel > HMP > Boost = %t", hmp.Boost)
-					Debug(boostPath)
-				}
+				Debug("> Kernel > HMP > Boost = %t", hmp.Boost)
 				if err := dev.BufferWriteBool(boostPath, *hmp.Boost); err != nil {return err}
 			}
 			if hmp.Semiboost != nil {
 				semiboostPath := pathJoin(hmpPath, hmpPaths.Semiboost)
-				if debug {
-					Debug("> Kernel > HMP > Semiboost = %t", hmp.Semiboost)
-					Debug(semiboostPath)
-				}
+				Debug("> Kernel > HMP > Semiboost = %t", hmp.Semiboost)
 				if err := dev.BufferWriteBool(semiboostPath, *hmp.Semiboost); err != nil {return err}
 			}
 			if hmp.ActiveDownMigration != nil {
 				activeDownMigrationPath := pathJoin(hmpPath, hmpPaths.ActiveDownMigration)
-				if debug {
-					Debug("> Kernel > HMP > Active Down Migration = %t", hmp.ActiveDownMigration)
-					Debug(activeDownMigrationPath)
-				}
+				Debug("> Kernel > HMP > Active Down Migration = %t", hmp.ActiveDownMigration)
 				if err := dev.BufferWriteBool(activeDownMigrationPath, *hmp.ActiveDownMigration); err != nil {return err}
 			}
 			if hmp.AggressiveUpMigration != nil {
 				aggressiveUpMigrationPath := pathJoin(hmpPath, hmpPaths.AggressiveUpMigration)
-				if debug {
-					Debug("> Kernel > HMP > Aggressive Up Migration = %t", hmp.AggressiveUpMigration)
-					Debug(aggressiveUpMigrationPath)
-				}
+				Debug("> Kernel > HMP > Aggressive Up Migration = %t", hmp.AggressiveUpMigration)
 				if err := dev.BufferWriteBool(aggressiveUpMigrationPath, *hmp.AggressiveUpMigration); err != nil {return err}
 			}
 			if hmp.Threshold != nil {
@@ -572,19 +533,13 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 				down := thld.Down.String()
 				if down != "" {
 					downPath := pathJoin(hmpPath, hmpPaths.Threshold.Down)
-					if debug {
-						Debug("> Kernel > HMP > Threshold > Down = %s", down)
-						Debug(downPath)
-					}
+					Debug("> Kernel > HMP > Threshold > Down = %s", down)
 					dev.BufferWrite(downPath, down)
 				}
 				up := thld.Up.String()
 				if up != "" {
 					upPath := pathJoin(hmpPath, hmpPaths.Threshold.Up)
-					if debug {
-						Debug("> Kernel > HMP > Threshold > Up = %s", up)
-						Debug(upPath)
-					}
+					Debug("> Kernel > HMP > Threshold > Up = %s", up)
 					dev.BufferWrite(upPath, up)
 				}
 			}
@@ -593,19 +548,13 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 				down := thld.Down.String()
 				if down != "" {
 					downPath := pathJoin(hmpPath, hmpPaths.SbThreshold.Down)
-					if debug {
-						Debug("> Kernel > HMP > Semiboost Threshold > Down = %s", down)
-						Debug(downPath)
-					}
+					Debug("> Kernel > HMP > Semiboost Threshold > Down = %s", down)
 					dev.BufferWrite(downPath, down)
 				}
 				up := thld.Up.String()
 				if up != "" {
 					upPath := pathJoin(hmpPath, hmpPaths.SbThreshold.Up)
-					if debug {
-						Debug("> Kernel > HMP > Semiboost Threshold > Up = %s", up)
-						Debug(upPath)
-					}
+					Debug("> Kernel > HMP > Semiboost Threshold > Up = %s", up)
 					dev.BufferWrite(upPath, up)
 				}
 			}
@@ -613,25 +562,19 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 	}
 
 	if profile.IPA != nil {
+		Debug("Loading IPA")
 		ipa := profile.IPA
 		ipaPaths := dev.Paths.IPA
 		ipaPath := ipaPaths.Path
 		if ipa.Enabled != nil {
+			Debug("> IPA > Enabled = %t", *ipa.Enabled)
 			enabledPath := pathJoin(ipaPath, ipaPaths.Enabled)
-			if debug {
-				Debug("Loading IPA")
-				Debug("> IPA > Enabled = %t", ipa.Enabled)
-				Debug(enabledPath)
-			}
 			if err := dev.BufferWriteBool(enabledPath, *ipa.Enabled); err != nil {return err}
 			if *ipa.Enabled {
 				controlTemp := ipa.ControlTemp.String()
 				if controlTemp != "" {
 					ctPath := pathJoin(ipaPath, ipaPaths.ControlTemp)
-					if debug {
-						Debug("> IPA > Control Temp = %s", controlTemp)
-						Debug(ctPath)
-					}
+					Debug("> IPA > Control Temp = %s", controlTemp)
 					dev.BufferWrite(ctPath, controlTemp)
 				}
 			}
@@ -641,23 +584,15 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 	if profile.InputBooster != nil {
 		ib := profile.InputBooster
 		ibPaths := dev.Paths.InputBooster
-		if debug {
-			Debug("Loading input booster")
-		}
+		Debug("Loading input booster")
 		if ib.Head != "" {
 			headPath := ibPaths.Head
-			if debug {
-				Debug("> Input Booster > Head = %s", ib.Head)
-				Debug(headPath)
-			}
+			Debug("> Input Booster > Head = %s", ib.Head)
 			dev.BufferWrite(headPath, ib.Head)
 		}
 		if ib.Tail != "" {
 			tailPath := ibPaths.Tail
-			if debug {
-				Debug("> Input Booster > Tail = %s", ib.Tail)
-				Debug(tailPath)
-			}
+			Debug("> Input Booster > Tail = %s", ib.Tail)
 			dev.BufferWrite(tailPath, ib.Tail)
 		}
 	}
@@ -667,28 +602,19 @@ func (dev *Device) setProfile(profile *Profile, name string) error {
 		slowPaths := dev.Paths.SecSlow
 		if slow.Enabled != nil {
 			enabledPath := slowPaths.Enabled
-			if debug {
-				Debug("Loading sec_slow")
-				Debug("> sec_slow > Enabled = %t", slow.Enabled)
-				Debug(enabledPath)
-			}
+			Debug("Loading sec_slow")
+			Debug("> sec_slow > Enabled = %t", slow.Enabled)
 			if err := dev.BufferWriteBool(enabledPath, *slow.Enabled); err != nil {return err}
 			if *slow.Enabled {
 				if slow.Enforced != nil {
 					enforcedPath := slowPaths.Enforced
-					if debug {
-						Debug("> sec_slow > Enforced = %t", slow.Enforced)
-						Debug(enforcedPath)
-					}
+					Debug("> sec_slow > Enforced = %t", slow.Enforced)
 					if err := dev.BufferWriteBool(enforcedPath, *slow.Enforced); err != nil {return err}
 				}
 				timerRate := slow.TimerRate.String()
 				if timerRate != "" {
 					timerRatePath := slowPaths.TimerRate
-					if debug {
-						Debug("> sec_slow > Timer Rate = %s", timerRate)
-						Debug(timerRatePath)
-					}
+					Debug("> sec_slow > Timer Rate = %s", timerRate)
 					dev.BufferWrite(timerRatePath, timerRate)
 				}
 			}

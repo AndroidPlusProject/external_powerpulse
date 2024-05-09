@@ -400,6 +400,11 @@ func reloadConfig() {
 	}
 	Debug("Profile inheritance: %s", device.ProfileInheritance)
 
+	if len(device.ProfileInheritance) > 0 {
+		Debug("Expanding profile inheritance cache...")
+		device.ProfilesInherited = device.GetInheritedProfiles()
+	}
+
 	if device.ProfileOrder == nil || len(device.ProfileOrder) == 0 {
 		Debug("No profile order was specified")
 		//Try to add any recognizable profiles

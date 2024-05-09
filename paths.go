@@ -24,6 +24,7 @@ type PathsPowerPulse struct {
 
 type PathsCluster struct { //universal7420: apollo, atlas
 	Path string //universal7420: /sys/devices/system/cpu
+	CPU string //universal7420: cpu0 for apollo, cpu4 for atlas
 	CPUFreq *PathsCPUFreq
 }
 
@@ -120,20 +121,33 @@ func (p *Paths) Init() error {
 	if p.Clusters != nil && len(p.Clusters) > 0 {
 		for clusterName, _ := range p.Clusters {
 			cluster := p.Clusters[clusterName]
-			if _, err := pathOrStockMustExist(&cluster.Path, GetPaths_Cluster); err != nil {
+			clusterPath, err := pathOrStockMustExist(&cluster.Path, GetPaths_Cluster)
+			if err != nil {
+				Error("Error finding path for cluster %s: %v", clusterName, err)
 				//Cluster defined in manifest paths, require a valid path to be available
-				return pathErrorDefinition("clusters/%s", clusterName)
+				return pathErrorDefinition("clusters/%s/path", clusterName)
+			}
+			Debug("Chose cluster path: %s", cluster.Path)
+			if cluster.CPU == "" {
+				//Cluster defined in manifest paths, requirqe a valid CPU node to use as the parent node
+				return pathErrorDefinition("clusters/%s/cpu", clusterName)
+			}
+			cpuPath := pathJoin(clusterPath, cluster.CPU)
+			if !pathValid(cpuPath) {
+				return pathErrorInvalid("clusters/%s/cpu", clusterName)
 			}
 			CachePaths_Cluster(cluster.Path)
+			Debug("Chose cluster node: %s", cluster.CPU)
 
 			freq := cluster.CPUFreq
 			freqPath := ""
 			if freq == nil {
 				freq = &PathsCPUFreq{}
-				freqPath, _ = GetPaths_CPUFreq(cluster.Path, pathJoin(cluster.Path, clusterName))
+				freqPath, _ = GetPaths_CPUFreq(cpuPath)
 				if freqPath != "" {
+					Debug("Chose cpufreq path: %s", freqPath)
 					freq.Path = freqPath
-					freqPath = pathJoin(cluster.Path, freqPath)
+					freqPath = pathJoin(cpuPath, freqPath)
 					freq.Governor, _ = GetPaths_CPUFreq_Governor(freqPath)
 					freq.Governors, _ = GetPaths_CPUFreq_Governors(freqPath)
 					freq.Max, _ = GetPaths_CPUFreq_Max(freqPath)
@@ -141,11 +155,12 @@ func (p *Paths) Init() error {
 					freq.Speed, _ = GetPaths_CPUFreq_Speed(freqPath)
 				}
 			} else {
-				freqPath, err := pathOrStockMustExist(&freq.Path, GetPaths_CPUFreq, cluster.Path)
+				freqPath, err := pathOrStockMustExist(&freq.Path, GetPaths_CPUFreq, cluster.CPU)
 				if err != nil {
 					//CPUFreq defined in manifest paths, require a valid path to be available
-					return pathErrorDefinition("clusters/%s/cpufreq relative to path %s", clusterName, cluster.Path)
+					return pathErrorDefinition("clusters/%s/cpufreq relative to path %s", clusterName, cluster.CPU)
 				}
+				Info("Found cpufreq path: %s", freqPath)
 				if err := pathMustOrStockCanExist(&freq.Governor, GetPaths_CPUFreq_Governor, freqPath); err != nil {
 					return pathErrorInvalid(freq.Governor, "clusters/%s/cpufreq/governor", clusterName)
 				}

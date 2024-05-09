@@ -13,7 +13,7 @@ func CachePaths_Cluster(cache string) {
 	Paths_Cluster = append(Paths_Cluster, cache)
 }
 
-var Paths_CPUFreq = []string{"cpu0/cpufreq"}
+var Paths_CPUFreq = []string{"cpufreq"}
 func GetPaths_CPUFreq(prefix ...string) (string, string) {
 	return pathLoop(Paths_CPUFreq, prefix...)
 }

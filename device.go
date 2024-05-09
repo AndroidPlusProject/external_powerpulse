@@ -20,6 +20,7 @@ type Device struct {
 	ProfileInheritance  []string    `json:"profile_inheritance"`   //Profile order for inheritance of configurations
 	ProfileOrder        []string    `json:"profile_order"`         //Profile order for stargazing
 	Profiles            map[string]*Profile                        //Manifest of device settings per profile
+	ProfilesInherited   map[string]*Profile `json:"-"`             //Manifest of device settings per profile, with inheritance expansion caching
 	Profile             string `json:"-"`                          //The currently loaded profile
 }
 

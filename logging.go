@@ -52,5 +52,7 @@ func Verbose(format string, replacements ...any) {
 	parseMsg(LogVerbose, format, replacements...)
 }
 func Debug(format string, replacements ...any) {
-	parseMsg(LogDebug, format, replacements...)
+	if debug {
+		parseMsg(LogDebug, format, replacements...)
+	}
 }
