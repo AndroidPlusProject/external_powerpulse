@@ -464,18 +464,29 @@ func (p *Paths) Init() error {
 	}
 
 	if p.Inputs != nil && len(p.Inputs) > 0 {
-		for inputName, _ := range p.Inputs {
+		for inputName, input := range p.Inputs {
 			//We only want to recognize plugged in inputs, as they won't always be present
 			//TODO: Listen to all input paths for any new directories so we can register configured paths
-			input := p.Inputs[inputName]
+			//TODO: Scan for input paths automatically using name
 			delete(p.Inputs, inputName)
-			if _, err := pathOrStockMustExist(&input.Path, GetPaths_Input); err != nil {
-				continue
+			if !pathValid(input.Path) {
+				inputPath, _ := GetPaths_Input()
+				if !pathValid(inputPath) {
+					Error("Failed to find stock inputs path, please use absolute path for input: %s", inputName)
+					continue
+				}
+				input.Path = pathJoin(inputPath, input.Path)
+				if !pathValid(input.Path) {
+					Error("Failed to find described path for input: %s", inputName)
+					continue
+				}
 			}
 			if err := pathMustOrStockCanExist(&input.Enabled, GetPaths_Input_Enabled, input.Path); err != nil {
+				Error("Failed to find enabled for input %s: %v", inputName, err)
 				continue
 			}
 			p.Inputs[inputName] = input
+			Debug("Found input: %s", inputName)
 		}
 	}
 
@@ -523,7 +534,7 @@ func pathOrStockMustExist(path *string, handler func(...string) (string, string)
 			}
 			return "", fmt.Errorf("defined path is invalid for prefixes")
 		} else if !pathValid(*path) {
-			return "", fmt.Errorf("defined path is invalid")
+			return "", fmt.Errorf("defined path is invalid: %s")
 		}
 	}
 	return *path, nil
