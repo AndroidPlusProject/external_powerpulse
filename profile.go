@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	jsone "github.com/go-json-experiment/json"
 )
 
 type Profile struct {
@@ -138,14 +140,27 @@ func (dev *Device) GetProfile(name string) *Profile {
 }
 
 func (dev *Device) GetInheritedProfiles() map[string]*Profile {
-	profile := &Profile{}
 	profiles := make(map[string]*Profile)
 
 	//Store a copy of each profile after inheritance from the previous one
 	for i := 0; i < len(dev.ProfileInheritance); i++ {
-		dev.getProfile(dev.ProfileInheritance[i], profile)
-		tmp := *profile
-		profiles[dev.ProfileInheritance[i]] = &tmp
+		Debug("Creating inherited profile %d: %s", i, dev.ProfileInheritance[i])
+		var profile Profile //Start with a blank profile structure
+		if i > 0 {
+			Debug("Copying previous profile %d: %s", i-1, dev.ProfileInheritance[i-1])
+			tmp := profiles[dev.ProfileInheritance[i-1]]
+			bytes, err := jsone.Marshal(tmp)
+			if err != nil {
+				Error("Marshal: %v", err)
+				return nil
+			}
+			if err := jsone.Unmarshal(bytes, &profile); err != nil {
+				Error("Unmarshal: %v", err)
+				return nil
+			}
+		}
+		dev.getProfile(dev.ProfileInheritance[i], &profile) //Install the new profile inheritance overlay
+		profiles[dev.ProfileInheritance[i]] = &profile //Store the expanded profile with a new reference
 	}
 
 	return profiles

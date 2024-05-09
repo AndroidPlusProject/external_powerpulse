@@ -72,7 +72,9 @@ adb push $LIB $LIBDST
 adb logcat -c
 
 # Kill the power HAL so that Android will restart it
-adb shell killall -9 $HAL
+set +e
+adb shell killall -9 $HAL 2>/dev/null
+set -e
 
 # Start the power HAL just in case Android fails to restart it
 adb shell start power-hal-1-3
